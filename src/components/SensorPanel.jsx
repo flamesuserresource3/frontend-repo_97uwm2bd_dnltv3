@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Thermometer, Flame, Gauge } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+const API_BASE = import.meta.env.VITE_BACKEND_URL || "";
+
 function StatCard({ icon: Icon, label, value, unit, accent = 'emerald' }) {
   const ring = {
     emerald: 'ring-emerald-400/30 bg-emerald-400/10 text-emerald-300',
@@ -29,16 +31,66 @@ export default function SensorPanel() {
   const [temp, setTemp] = useState(22.5);
   const [gas, setGas] = useState(350);
   const [aqi, setAqi] = useState(42);
+  const [riskLevel, setRiskLevel] = useState('Normal');
+  const [riskScore, setRiskScore] = useState(10);
   const timerRef = useRef(null);
+
+  const riskColor = useMemo(() => {
+    if (riskLevel === 'High risk') return 'bg-red-500/10 text-red-300 ring-red-400/30';
+    if (riskLevel === 'Elevated') return 'bg-amber-500/10 text-amber-300 ring-amber-400/30';
+    return 'bg-emerald-500/10 text-emerald-300 ring-emerald-400/30';
+  }, [riskLevel]);
+
+  const assessRisk = async (t, g, a) => {
+    try {
+      if (!API_BASE) return; // no backend configured
+      const res = await fetch(`${API_BASE}/api/insights/assess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ temperature_c: t, gas_ppm: g, aqi: a }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRiskLevel(data.level);
+        setRiskScore(data.score);
+      }
+    } catch {}
+  };
+
+  const pushReading = async (t, g, a) => {
+    try {
+      if (!API_BASE) return;
+      const payload = {
+        timestamp: new Date().toISOString(),
+        temperature_c: t,
+        gas_ppm: g,
+        aqi: a,
+        location: { lat: 0, lng: 0 },
+        source: 'simulator',
+      };
+      await fetch(`${API_BASE}/api/sensors/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch {}
+  };
+
+  const tick = () => {
+    setTemp((tPrev) => {
+      const t = Number((tPrev + (Math.random() - 0.5) * 0.6).toFixed(1));
+      setTimeout(() => assessRisk(t, gas, aqi), 0);
+      setTimeout(() => pushReading(t, gas, aqi), 0);
+      return t;
+    });
+    setGas((gPrev) => Math.max(250, Math.min(1200, Math.round(gPrev + (Math.random() - 0.45) * 25))));
+    setAqi((aPrev) => Math.max(10, Math.min(180, Math.round(aPrev + (Math.random() - 0.45) * 5))));
+  };
 
   const startStream = () => {
     if (timerRef.current) return;
     setStreaming(true);
-    timerRef.current = setInterval(() => {
-      setTemp((t) => Number((t + (Math.random() - 0.5) * 0.6).toFixed(1)));
-      setGas((g) => Math.max(250, Math.min(1200, Math.round(g + (Math.random() - 0.45) * 25))));
-      setAqi((a) => Math.max(10, Math.min(180, Math.round(a + (Math.random() - 0.45) * 5))));
-    }, 900);
+    timerRef.current = setInterval(tick, 900);
   };
 
   const stopStream = () => {
@@ -51,12 +103,6 @@ export default function SensorPanel() {
 
   useEffect(() => () => stopStream(), []);
 
-  const statusBadge = useMemo(() => {
-    const level = gas > 800 || aqi > 120 ? 'High risk' : gas > 600 || aqi > 90 ? 'Elevated' : 'Normal';
-    const color = level === 'High risk' ? 'bg-red-500/10 text-red-300 ring-red-400/30' : level === 'Elevated' ? 'bg-amber-500/10 text-amber-300 ring-amber-400/30' : 'bg-emerald-500/10 text-emerald-300 ring-emerald-400/30';
-    return { level, color };
-  }, [gas, aqi]);
-
   return (
     <section className="relative bg-slate-950 py-12 text-white">
       <div className="mx-auto w-full max-w-7xl px-6">
@@ -66,8 +112,8 @@ export default function SensorPanel() {
             <p className="text-white/70">Simulated Raspberry Pi feed for temperature and gas sensors.</p>
           </div>
           <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${statusBadge.color}`}>
-              <Activity size={14} /> {statusBadge.level}
+            <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${riskColor}`}>
+              <Activity size={14} /> {riskLevel} <span className="ml-1 opacity-60">({riskScore})</span>
             </span>
             {streaming ? (
               <button onClick={stopStream} className="rounded-lg bg-white/10 px-4 py-2 text-sm ring-1 ring-white/20 hover:bg-white/15">
@@ -108,6 +154,9 @@ export default function SensorPanel() {
               <div className="text-white">{aqi}</div>
             </div>
           </div>
+          {!API_BASE && (
+            <div className="mt-3 text-xs text-white/50">Tip: Set VITE_BACKEND_URL to enable logging and AI insights.</div>
+          )}
         </motion.div>
       </div>
     </section>
